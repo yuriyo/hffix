@@ -71,8 +71,19 @@ const char SOH = '\001'; //!< The SOH character.
 
 namespace details {
 
-inline void throw_range_error() {
-    throw std::out_of_range("hffix message_writer buffer full");
+
+/*!
+\brief Internal function to check for buffer overflow.
+    Throws std::out_of_range when condition is not met.
+    Minimize conditinal coverage in the code.
+    Removes the need for a separate check in every function that writes to a buffer.
+    Can be extended in the future to provide more information about the overflow.
+\param condition The condition to check.
+*/
+inline void assert_range(const bool condition) {
+    if (!condition) {
+        throw std::out_of_range("hffix message_writer buffer full");
+    }
 }
 
 template <std::size_t N>
@@ -152,13 +163,13 @@ template<typename Int_type> char* itoa(Int_type number, char* buffer, char* end)
 
     char*b = buffer;
     do {
-        if (b >= end) details::throw_range_error();
+        assert_range(b < end);
         *b++ = '0' + (number % 10);
         number /= 10;
     } while(number);
 
     if (isnegative) {
-        if (b >= end) details::throw_range_error();
+        assert_range(b < end);
         *b++ = '-';
     }
 
@@ -185,7 +196,7 @@ template<typename Uint_type> char* utoa(Uint_type number, char* buffer, char* en
     // Write out the digits in reverse order.
     char*b = buffer;
     do {
-        if (b >= end) details::throw_range_error();
+        assert_range(b < end);
         *b++ = '0' + (number % 10);
         number /= 10;
     } while(number);
@@ -262,17 +273,17 @@ template<typename Int_type> char* dtoa(Int_type mantissa, Int_type exponent, cha
 
     char*b = buffer;
     do {
-        if (b >= end) details::throw_range_error();
+        assert_range(b < end);
         *b++ = '0' + (mantissa % 10);
         mantissa /= 10;
         if (++exponent == 0) {
-            if (b >= end) details::throw_range_error();
+            assert_range(b < end);
             *b++ = '.';
         }
     } while(mantissa > 0 || exponent < 1);
 
     if (isnegative) {
-        if (b >= end) details::throw_range_error();
+        assert_range(b < end);
         *b++ = '-';
     }
 
@@ -729,9 +740,7 @@ public:
      */
     void push_back_header(char const* begin_string_version) {
         if (body_length_) throw std::logic_error("hffix message_writer.push_back_header called twice");
-        if (buffer_end_ - next_ < 2 + std::ptrdiff_t(strlen(begin_string_version)) + 3 + 7) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + 2 + std::ptrdiff_t(strlen(begin_string_version)) + 3 + 7);
         memcpy(next_, "8=", 2);
         next_ += 2;
         memcpy(next_, begin_string_version, std::strlen(begin_string_version));
@@ -777,9 +786,7 @@ public:
         body_length_[4] = '0' + (len / 10) % 10;
         body_length_[5] = '0' + len % 10;
 
-        if (buffer_end_ - next_ < 7) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + 7);
 
         // write out the CheckSum after optionally calculating it
         if (calculate_checksum) {
@@ -822,9 +829,7 @@ public:
     */
     void push_back_string(int tag, char const* begin, char const* end) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < (end - begin) + 2) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + (end - begin) + 2);
         *next_++ = '=';
         memcpy(next_, begin, end - begin);
         next_ += (end - begin);
@@ -844,7 +849,7 @@ public:
         // is longer than the remaining buffer.
         char const* cstring_end = (char const*)memchr(cstring, 0, buffer_end_ - next_);
         if (cstring_end) push_back_string(tag, cstring, cstring_end);
-        else details::throw_range_error();
+        else assert_range(false); // unconditional throw
     }
 
     /*!
@@ -889,9 +894,7 @@ public:
     */
     void push_back_char(int tag, char character) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < 3) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + 3);
         *next_++ = '=';
         *next_++ = character;
         *next_++ = SOH;
@@ -912,10 +915,10 @@ public:
     */
     template<typename Int_type> void push_back_int(int tag, Int_type number) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (next_ >= buffer_end_) details::throw_range_error();
+        assert_range(buffer_end_ > next_);
         *next_++ = '=';
         next_ = details::itoa(number, next_, buffer_end_);
-        if (next_ >= buffer_end_) details::throw_range_error();
+        assert_range(buffer_end_ > next_);
         *next_++ = SOH;
     }
 
@@ -941,10 +944,10 @@ public:
     */
     template<typename Int_type> void push_back_decimal(int tag, Int_type mantissa, Int_type exponent) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (next_ >= buffer_end_) details::throw_range_error();
+        assert_range(buffer_end_ > next_);
         *next_++ = '=';
         next_ = details::dtoa(mantissa, exponent, next_, buffer_end_);
-        if (next_ >= buffer_end_) details::throw_range_error();
+        assert_range(buffer_end_ > next_);
         *next_++ = SOH;
     }
 //@}
@@ -965,9 +968,7 @@ public:
     */
     void push_back_date(int tag, int year, int month, int day) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < details::len("=YYYYMMDD|")) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + details::len("=YYYYMMDD|"));
         *next_++ = '=';
         itoa_padded(year, next_, next_ + 4);
         next_ += 4;
@@ -988,9 +989,7 @@ public:
     */
     void push_back_monthyear(int tag, int year, int month) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < details::len("=YYYYMM|")) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + details::len("=YYYYMM|"));
         *next_++ = '=';
         itoa_padded(year, next_, next_ + 4);
         next_ += 4;
@@ -1015,9 +1014,7 @@ public:
     */
     void push_back_timeonly(int tag, int hour, int minute, int second) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < details::len("=HH:MM:SS|")) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + details::len("=HH:MM:SS|"));
         *next_++ = '=';
         itoa_padded(hour, next_, next_ + 2);
         next_ += 2;
@@ -1045,9 +1042,7 @@ public:
     */
     void push_back_timeonly(int tag, int hour, int minute, int second, int millisecond) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < details::len("=HH:MM:SS.sss|")) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + details::len("=HH:MM:SS.sss|"));
         *next_++ = '=';
         itoa_padded(hour, next_, next_ + 2);
         next_ += 2;
@@ -1078,9 +1073,7 @@ public:
     */
     void push_back_timeonly_nano(int tag, int hour, int minute, int second, int nanosecond) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < details::len("=HH:MM:SS.sssssssss|")) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + details::len("=HH:MM:SS.sssssssss|"));
         *next_++ = '=';
         itoa_padded(hour, next_, next_ + 2);
         next_ += 2;
@@ -1115,10 +1108,7 @@ public:
     */
     void push_back_timestamp(int tag, int year, int month, int day, int hour, int minute, int second) {
         next_ = details::itoa(tag, next_, buffer_end_);
-
-        if (buffer_end_ - next_ < details::len("=YYYYMMDD-HH:MM:SS|")) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + details::len("=YYYYMMDD-HH:MM:SS|"));
         *next_++ = '=';
         itoa_padded(year, next_, next_ + 4);
         next_ += 4;
@@ -1156,9 +1146,7 @@ public:
     */
     void push_back_timestamp(int tag, int year, int month, int day, int hour, int minute, int second, int millisecond) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < details::len("=YYYYMMDD-HH:MM:SS.sss|")) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + details::len("=YYYYMMDD-HH:MM:SS.sss|"));
         *next_++ = '=';
         itoa_padded(year, next_, next_ + 4);
         next_ += 4;
@@ -1199,9 +1187,7 @@ public:
     */
     void push_back_timestamp_nano(int tag, int year, int month, int day, int hour, int minute, int second, int nanosecond) {
         next_ = details::itoa(tag, next_, buffer_end_);
-        if (buffer_end_ - next_ < details::len("=YYYYMMDD-HH:MM:SS.sssssssss|")) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + details::len("=YYYYMMDD-HH:MM:SS.sssssssss|"));
         *next_++ = '=';
         itoa_padded(year, next_, next_ + 4);
         next_ += 4;
@@ -1488,16 +1474,13 @@ public:
     */
     void push_back_data(int tag_data_length, int tag_data, char const* begin, char const* end) {
         next_ = details::itoa(tag_data_length, next_, buffer_end_);
-        if (next_ == buffer_end_) details::throw_range_error();
+        assert_range(buffer_end_ > next_);
         *next_++ = '=';
         next_ = details::itoa(end - begin, next_, buffer_end_);
-        if (next_ == buffer_end_) details::throw_range_error();
+        assert_range(buffer_end_ > next_);
         *next_++ = SOH;
         next_ = details::itoa(tag_data, next_, buffer_end_);
-
-        if (buffer_end_ - next_ < (end - begin) + 2) {
-            details::throw_range_error();
-        }
+        assert_range(buffer_end_ >= next_ + (end - begin) + 2);
         *next_++ = '=';
         memcpy(next_, begin, end - begin);
         next_ += end - begin;
