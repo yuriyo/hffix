@@ -739,12 +739,13 @@ public:
      * \throw std::logic_error When called more than once for a single message.
      */
     void push_back_header(char const* begin_string_version) {
+        const size_t version_length = std::strlen(begin_string_version);
         if (body_length_) throw std::logic_error("hffix message_writer.push_back_header called twice");
-        assert_range(buffer_end_ >= next_ + 2 + std::ptrdiff_t(strlen(begin_string_version)) + 3 + 7);
+        assert_range(buffer_end_ >= next_ + 2 + std::ptrdiff_t(version_length) + 3 + 7);
         memcpy(next_, "8=", 2);
         next_ += 2;
-        memcpy(next_, begin_string_version, std::strlen(begin_string_version));
-        next_ += std::strlen(begin_string_version);
+        memcpy(next_, begin_string_version, version_length);
+        next_ += version_length;
         *(next_++) = SOH;
         memcpy(next_, "9=", 2);
         next_ += 2;
