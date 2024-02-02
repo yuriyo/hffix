@@ -87,9 +87,61 @@ inline void assert_range(const bool condition) {
 }
 
 template <std::size_t N>
-std::ptrdiff_t len(char const (&)[N]) { return std::ptrdiff_t(N - 1); }
+std::ptrdiff_t len(char const (&)[N]) constexpr { return std::ptrdiff_t(N - 1); }
 
-/*
+/*!
+\brief Internal function to write a char to a buffer.
+
+\param buffer Pointer to the location to write the char.
+\param c The char to write.
+\return Pointer to the next location in the buffer.
+*/
+inline char* put(char* buffer, char c) {
+    *buffer = c;
+    return buffer + 1;
+}
+
+/*!
+\brief Internal function to write a SOH to a buffer.
+
+\param buffer Pointer to the location to write the SOH.
+\return Pointer to the next location in the buffer.
+*/
+inline char* put_SOH(char* buffer) {
+    return put(buffer, SOH);
+}
+
+
+/*!
+\brief Internal function to write a string to a buffer.
+
+\param buffer Pointer to the location to write the string.
+\param str Pointer to the beginning of the string.
+\param len The length of the string.
+
+\return Pointer to the next location in the buffer.
+*/
+inline char* put_str(char* buffer, const char* str, std::size_t len) {
+    std::memcpy(buffer, str, len);
+    return buffer + len;
+}
+
+/*!
+\brief Internal function to write a string to a buffer.
+
+\param buffer Pointer to the location to write the string.
+\param str Pointer to the beginning of the string.
+
+\return Pointer to the next location in the buffer.
+*/
+template <std::size_t N>
+inline char* put_str(char* buffer, char const (&str)[N]) {
+    return put_str(buffer, str, N - 1);
+}
+
+
+
+/*!
 \brief Internal ascii-to-integer conversion.
 
 Parses ascii and returns a (possibly negative) integer.
@@ -99,7 +151,7 @@ Parses ascii and returns a (possibly negative) integer.
 \param end Pointer to past-the-end of the ascii string.
 \return The ascii string represented as an integer of type Int_type.
 */
-template<typename Int_type> Int_type atoi(char const* begin, char const* end)
+template<typename Int_type> inline Int_type atoi(char const* begin, char const* end)
 {
     Int_type val(0);
     bool isnegative(false);
@@ -128,7 +180,7 @@ Parses ascii and returns an unsigned integer.
 \param end Pointer to past-the-end of the ascii string.
 \return The ascii string represented as an unsigned integer of type Uint_type.
 */
-template<typename Uint_type> Uint_type atou(char const* begin, char const* end)
+template<typename Uint_type> inline Uint_type atou(char const* begin, char const* end)
 {
     Uint_type val(0);
 
@@ -141,7 +193,7 @@ template<typename Uint_type> Uint_type atou(char const* begin, char const* end)
 }
 
 
-/*
+/*!
 \brief Internal integer-to-ascii conversion.
 
 Writes an integer out as ascii.
@@ -152,7 +204,7 @@ Writes an integer out as ascii.
 \param end Past-the-end of the buffer, to check for overflow.
 \return Pointer to past-the-end of the ascii that was written.
 */
-template<typename Int_type> char* itoa(Int_type number, char* buffer, char* end)
+template<typename Int_type> inline char* itoa(Int_type number, char* buffer, char* end)
 {
     // Write out the digits in reverse order.
     bool isnegative(false);
@@ -179,6 +231,41 @@ template<typename Int_type> char* itoa(Int_type number, char* buffer, char* end)
     return b;
 }
 
+/*!
+\brief Unsigned-to-ascii conversion padded with zeros.
+
+Writes an integer out as ascii.
+
+\tparam Uint_type Type of unsigned to be converted.
+\param number Value of the integer to be converted.
+\param buffer Pointer to location for the ascii to be written.
+\param len Length of the buffer, to check for overflow.
+\return Pointer to past-the-end of the ascii that was written.
+*/
+template<typename Uint_type> inline char* utoa_zero_padded(Uint_type number, char* buffer, size_t len)
+{
+    // Write out the digits in reverse order.
+    for(char* e = buffer + len - 1; e >= buffer; --e, number/=10) {
+        *e = '0' + (number % 10);
+    }
+    return buffer + len;
+}
+
+/*!
+\brief Put tag with delimeter
+
+\param tag Tag to write
+\param buffer Pointer to the location to write the string.
+\param buffer_end Pointer to past-the-end of the buffer.
+
+\return Pointer to the next location in the buffer.
+*/
+inline char* put_tag_with_delimeter(int tag, char* buffer, char* buffer_end)
+{
+    buffer = itoa(tag, buffer, buffer_end);
+    assert_range(buffer < buffer_end);
+    return put(buffer, '=');
+}
 
 /*
 \brief Internal unsigned-integer-to-ascii conversion.
@@ -739,19 +826,18 @@ public:
      * \throw std::logic_error When called more than once for a single message.
      */
     void push_back_header(char const* begin_string_version) {
-        const size_t version_length = std::strlen(begin_string_version);
         if (body_length_) throw std::logic_error("hffix message_writer.push_back_header called twice");
-        assert_range(buffer_end_ >= next_ + 2 + std::ptrdiff_t(version_length) + 3 + 7);
-        memcpy(next_, "8=", 2);
-        next_ += 2;
-        memcpy(next_, begin_string_version, version_length);
-        next_ += version_length;
-        *(next_++) = SOH;
-        memcpy(next_, "9=", 2);
-        next_ += 2;
+        // Write BeginString and BodyLength fields.
+        const size_t version_length = std::strlen(begin_string_version);
+        assert_range(buffer_end_ >= next_ + details::len("8=") + std::ptrdiff_t(version_length) + 1 /* SOH */ + details::len("9=000000|"));
+        next_ = details::put_str(next_, "8=");
+        next_ = details::put_str(next_, begin_string_version, version_length);
+        next_ = details::put_SOH(next_);
+        next_ = details::put_str(next_, "9=");
+        // store pointer to BodyLength field, so we can write it later on in push_back_trailer().
         body_length_ = next_;
         next_ += 6; // 6 characters reserved for BodyLength.
-        *next_++ = SOH;
+        next_ = details::put_SOH(next_);
     }
 
 
@@ -780,15 +866,9 @@ public:
         }
 
         size_t const len = next_ - (body_length_ + 7);
-        body_length_[0] = '0' + (len / 100000) % 10;
-        body_length_[1] = '0' + (len / 10000) % 10;
-        body_length_[2] = '0' + (len / 1000) % 10;
-        body_length_[3] = '0' + (len / 100) % 10;
-        body_length_[4] = '0' + (len / 10) % 10;
-        body_length_[5] = '0' + len % 10;
+        details::utoa_zero_padded(len, body_length_, 6);
 
-        assert_range(buffer_end_ >= next_ + 7);
-
+        assert_range(buffer_end_ >= next_ + details::len("10=000|"));
         // write out the CheckSum after optionally calculating it
         if (calculate_checksum) {
 #if __cplusplus >= 201103L
@@ -798,20 +878,12 @@ public:
 #endif
             uint8_t const checksum = std::accumulate(buffer_, next_, uint8_t(0));
 
-            memcpy(next_, "10=", 3);
-            next_ += 3;
-            next_[0] = '0' + ((checksum / 100) % 10);
-            next_[1] = '0' + ((checksum / 10) % 10);
-            next_[2] = '0' + (checksum % 10);
-
-            next_ += 3;
-            *next_++ = SOH;
+            next_ = details::put_str(next_, "10=");
+            next_ = details::utoa_zero_padded(checksum, next_, 3);
         } else {
-            memcpy(next_, "10=000", 6);
-            next_ += 6;
-            *next_++ = SOH;
+            next_ = details::put_str(next_, "10=000");
         }
-
+        next_ = details::put_SOH(next_);
     }
 
     //@}
@@ -829,12 +901,11 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_string(int tag, char const* begin, char const* end) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + (end - begin) + 2);
-        *next_++ = '=';
-        memcpy(next_, begin, end - begin);
-        next_ += (end - begin);
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        const size_t len = end - begin;
+        assert_range(buffer_end_ >= next_ + len + 1);
+        next_ = details::put_str(next_, begin, len);
+        next_ = details::put_SOH(next_);
     }
 
     /*!
@@ -894,11 +965,10 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_char(int tag, char character) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + 3);
-        *next_++ = '=';
-        *next_++ = character;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + + details::len("C|")));
+        next_ = details::put(next_, character);
+        next_ = details::put_SOH(next_);
     }
 //@}
 
@@ -915,12 +985,10 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     template<typename Int_type> void push_back_int(int tag, Int_type number) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ > next_);
-        *next_++ = '=';
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
         next_ = details::itoa(number, next_, buffer_end_);
         assert_range(buffer_end_ > next_);
-        *next_++ = SOH;
+        next_ = details::put_SOH(next_);
     }
 
 //@}
@@ -944,12 +1012,10 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     template<typename Int_type> void push_back_decimal(int tag, Int_type mantissa, Int_type exponent) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ > next_);
-        *next_++ = '=';
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
         next_ = details::dtoa(mantissa, exponent, next_, buffer_end_);
         assert_range(buffer_end_ > next_);
-        *next_++ = SOH;
+        next_ = details::put_SOH(next_);
     }
 //@}
 
@@ -968,16 +1034,10 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_date(int tag, int year, int month, int day) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + details::len("=YYYYMMDD|"));
-        *next_++ = '=';
-        itoa_padded(year, next_, next_ + 4);
-        next_ += 4;
-        itoa_padded(month, next_, next_ + 2);
-        next_ += 2;
-        itoa_padded(day, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + details::len("YYYYMMDD|"));
+        next_ = details::utoa_zero_padded(year*10000 + month*100 + day, next_, 8);
+        next_ = details::put_SOH(next_);
     }
     /*!
     \brief Append a month-year field to the message.
@@ -989,14 +1049,10 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_monthyear(int tag, int year, int month) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + details::len("=YYYYMM|"));
-        *next_++ = '=';
-        itoa_padded(year, next_, next_ + 4);
-        next_ += 4;
-        itoa_padded(month, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + details::len("YYYYMM|"));
+        next_ = details::utoa_zero_padded(year*100 + month, next_, 6);
+        next_ = details::put_SOH(next_);
     }
 
     /*!
@@ -1014,18 +1070,14 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_timeonly(int tag, int hour, int minute, int second) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + details::len("=HH:MM:SS|"));
-        *next_++ = '=';
-        itoa_padded(hour, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(minute, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(second, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + details::len("HH:MM:SS|"));
+        next_ = details::utoa_zero_padded(hour, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(minute, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(second, next_, 2);
+        next_ = details::put_SOH(next_);
     }
 
     /*!
@@ -1042,21 +1094,16 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_timeonly(int tag, int hour, int minute, int second, int millisecond) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + details::len("=HH:MM:SS.sss|"));
-        *next_++ = '=';
-        itoa_padded(hour, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(minute, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(second, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = '.';
-        itoa_padded(millisecond, next_, next_ + 3);
-        next_ += 3;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + details::len("HH:MM:SS.sss|"));
+        next_ = details::utoa_zero_padded(hour, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(minute, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(second, next_, 2);
+        next_ = details::put(next_, '.');
+        next_ = details::utoa_zero_padded(millisecond, next_, 3);
+        next_ = details::put_SOH(next_);
     }
 
     /*!
@@ -1073,21 +1120,16 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_timeonly_nano(int tag, int hour, int minute, int second, int nanosecond) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + details::len("=HH:MM:SS.sssssssss|"));
-        *next_++ = '=';
-        itoa_padded(hour, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(minute, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(second, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = '.';
-        itoa_padded(nanosecond, next_, next_ + 9);
-        next_ += 9;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + details::len("HH:MM:SS.sssssssss|"));
+        next_ = details::utoa_zero_padded(hour, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(minute, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(second, next_, 2);
+        next_ = details::put(next_, '.');
+        next_ = details::utoa_zero_padded(nanosecond, next_, 9);
+        next_ = details::put_SOH(next_);
     }
 
     /*!
@@ -1108,25 +1150,16 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_timestamp(int tag, int year, int month, int day, int hour, int minute, int second) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + details::len("=YYYYMMDD-HH:MM:SS|"));
-        *next_++ = '=';
-        itoa_padded(year, next_, next_ + 4);
-        next_ += 4;
-        itoa_padded(month, next_, next_ + 2);
-        next_ += 2;
-        itoa_padded(day, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = '-';
-        itoa_padded(hour, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(minute, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(second, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + details::len("YYYYMMDD-HH:MM:SS|"));
+        next_ = details::utoa_zero_padded(year*10000 + month*100 + day, next_, 8);
+        next_ = details::put(next_, '-');
+        next_ = details::utoa_zero_padded(hour, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(minute, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(second, next_, 2);
+        next_ = details::put_SOH(next_);
     }
 
     /*!
@@ -1146,28 +1179,18 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_timestamp(int tag, int year, int month, int day, int hour, int minute, int second, int millisecond) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + details::len("=YYYYMMDD-HH:MM:SS.sss|"));
-        *next_++ = '=';
-        itoa_padded(year, next_, next_ + 4);
-        next_ += 4;
-        itoa_padded(month, next_, next_ + 2);
-        next_ += 2;
-        itoa_padded(day, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = '-';
-        itoa_padded(hour, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(minute, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(second, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = '.';
-        itoa_padded(millisecond, next_, next_ + 3);
-        next_ += 3;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + details::len("YYYYMMDD-HH:MM:SS.sss|"));
+        next_ = details::utoa_zero_padded(year*10000 + month*100 + day, next_, 8);
+        next_ = details::put(next_, '-');
+        next_ = details::utoa_zero_padded(hour, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(minute, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(second, next_, 2);
+        next_ = details::put(next_, '.');
+        next_ = details::utoa_zero_padded(millisecond, next_, 3);
+        next_ = details::put_SOH(next_);
     }
 
     /*!
@@ -1187,28 +1210,18 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_timestamp_nano(int tag, int year, int month, int day, int hour, int minute, int second, int nanosecond) {
-        next_ = details::itoa(tag, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + details::len("=YYYYMMDD-HH:MM:SS.sssssssss|"));
-        *next_++ = '=';
-        itoa_padded(year, next_, next_ + 4);
-        next_ += 4;
-        itoa_padded(month, next_, next_ + 2);
-        next_ += 2;
-        itoa_padded(day, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = '-';
-        itoa_padded(hour, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(minute, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = ':';
-        itoa_padded(second, next_, next_ + 2);
-        next_ += 2;
-        *next_++ = '.';
-        itoa_padded(nanosecond, next_, next_ + 9);
-        next_ += 9;
-        *next_++ = SOH;
+        next_ = details::put_tag_with_delimeter(tag, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + details::len("YYYYMMDD-HH:MM:SS.sssssssss|"));
+        next_ = details::utoa_zero_padded(year*10000 + month*100 + day, next_, 8);
+        next_ = details::put(next_, '-');
+        next_ = details::utoa_zero_padded(hour, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(minute, next_, 2);
+        next_ = details::put(next_, ':');
+        next_ = details::utoa_zero_padded(second, next_, 2);
+        next_ = details::put(next_, '.');
+        next_ = details::utoa_zero_padded(nanosecond, next_, 9);
+        next_ = details::put_SOH(next_);
     }
 //@}
 
@@ -1474,30 +1487,20 @@ public:
     \throw std::out_of_range When the remaining buffer size is too small.
     */
     void push_back_data(int tag_data_length, int tag_data, char const* begin, char const* end) {
-        next_ = details::itoa(tag_data_length, next_, buffer_end_);
-        assert_range(buffer_end_ > next_);
-        *next_++ = '=';
+        next_ = details::put_tag_with_delimeter(tag_data_length, next_, buffer_end_);
         next_ = details::itoa(end - begin, next_, buffer_end_);
         assert_range(buffer_end_ > next_);
-        *next_++ = SOH;
-        next_ = details::itoa(tag_data, next_, buffer_end_);
-        assert_range(buffer_end_ >= next_ + (end - begin) + 2);
-        *next_++ = '=';
-        memcpy(next_, begin, end - begin);
-        next_ += end - begin;
-        *next_++ = SOH;
+        next_ = details::put_SOH(next_);
+        // data block
+        next_ = details::put_tag_with_delimeter(tag_data, next_, buffer_end_);
+        assert_range(buffer_end_ >= next_ + (end - begin) + details::len("|"));
+        next_ = details::put_str(next_, begin, end - begin);
+        next_ = details::put_SOH(next_);
     }
 
 
 //@}
 private:
-    static void itoa_padded(int x, char* b, char* e) {
-        while (e > b) {
-            *--e = '0' + (x % 10);
-            x /= 10;
-        }
-    }
-
     char* buffer_;
     char* buffer_end_;
     char* next_;
@@ -2681,41 +2684,35 @@ private:
     friend class message_reader_const_iterator;
 
     void init() {
-
+        // incomplete by default
+        is_complete_ = false;
         // Skip the version prefix string "8=FIX.4.2" or "8=FIXT.1.1", et cetera.
-        char const* b = buffer_ + 9; // look for the first SOH
-
-        while(true) {
-            if (b >= buffer_end_) {
-                is_complete_ = false;
-                return;
-            }
-            if (*b == SOH) {
-                prefix_end_ = b;
-                break;
-            }
-            if (b - buffer_ > 11) {
-                invalid();
-                return;
-            }
-            ++b;
-        }
-
-        if (b + 1 >= buffer_end_) {
-            is_complete_ = false;
+        // look for the first SOH
+        char const* e = std::min(buffer_ + 12, buffer_end_);
+        char const* b = std::find(buffer_ + 9, e, SOH);
+        if (b >= buffer_end_) {
             return;
         }
-        if (b[1] != '9') { // next field must be tag 9 BodyLength
+        if (*b == SOH) {
+            prefix_end_ = b++;
+        } else if (b == e) {
             invalid();
             return;
         }
-        b += 3; // skip the " 9=" for tag 9 BodyLength
+
+        if (b + 2 >= buffer_end_) {
+            return;
+        }
+        if (!(b[0] == '9' && b[1] == '=')) { // next field must be tag 9 BodyLength
+            invalid();
+            return;
+        }
+        b += 2; // skip the "9=" for tag 9 BodyLength
 
         size_t bodylength(0); // the value of tag 9 BodyLength
 
         while(true) {
             if (b >= buffer_end_) {
-                is_complete_ = false;
                 return;
             }
             if (*b == SOH) break;
@@ -2727,13 +2724,12 @@ private:
             bodylength += *b++ - '0'; // we know that 0 <= (*b - '0') <= 9, so rvalue will be positive.
         }
 
-        ++b;
+        ++b; // skip the SOH
         if (b + 3 >= buffer_end_) {
-            is_complete_ = false;
             return;
         }
 
-        if (*b != '3' || b[1] != '5') { // next field must be tag 35 MsgType
+        if (b[0] != '3' || b[1] != '5' || b[2] != '=') { // next field must be tag 35 MsgType
             invalid();
             return;
         }
@@ -2741,7 +2737,6 @@ private:
         char const* checksum = b + bodylength;
 
         if (checksum + 7 > buffer_end_) {
-            is_complete_ = false;
             return;
         }
 
