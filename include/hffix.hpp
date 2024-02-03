@@ -2499,7 +2499,7 @@ public:
 
         if (!is_valid_) { // this message isn't valid, so we have to try to search for the beginning of the next message.
             char const* b = buffer_ + 1;
-            while(b < buffer_end_ - 10) {
+            while(b < buffer_end_ - 10) {  // FIXME: YO: unoptimized search, better to use memmem or something.
                 if (!std::memcmp(b, "8=FIX", 5))
                     break;
                 ++b;
@@ -2511,7 +2511,7 @@ public:
     }
 
    /*!
-    \brief Calulate the checksum for this message.
+    \brief Calculate the checksum for this message.
 
     Note that the *hffix* library never does this calculation implicitly
     for messages read. For checksum calculation this function must be
@@ -2530,10 +2530,10 @@ public:
 
     \throw std::logic_error if called on an invalid message. Check for `is_valid()` before calling.
     */
-    unsigned char calculate_check_sum() {
+    unsigned char calculate_check_sum() const {
         // return iterator for beginning of nonmutable sequence
         if (!is_valid_) throw std::logic_error("hffix Cannot calculate checksum for an invalid message.");
-        return std::accumulate(buffer_, end_.buffer_, (unsigned char)(0));
+        return std::accumulate( static_cast<const unsigned char*>(buffer_), static_cast<const unsigned char*>(end_.buffer_), (unsigned char)(0));
     }
 
     /*! \name Field Access */
@@ -2582,7 +2582,7 @@ public:
      * \brief Returns the FIX version prefix BeginString field value begin pointer. (Example: "FIX.4.4")
      */
     char const* prefix_begin() const {
-        return buffer_ + 2;
+        return buffer_ + details::len("8=");
     }
 
     /*!
@@ -2596,7 +2596,7 @@ public:
      * \brief Returns the FIX version prefix BeginString field value size. (Example: returns 7 for "FIX.4.4")
      */
     size_t prefix_size() const {
-        return prefix_end_ - buffer_ - 2;
+        return prefix_end() - prefix_begin();
     }
 
     /*!
@@ -2647,7 +2647,7 @@ public:
     \brief The size of the buffer in bytes.
     */
     size_t buffer_size() const {
-        return buffer_end_ - buffer_;
+        return buffer_end() - buffer_begin();
     }
 
     /*!
@@ -2675,7 +2675,7 @@ public:
     */
     size_t message_size() const {
         if (!is_valid_) throw std::logic_error("hffix Cannot determine size of an invalid message.");
-        return end_.current_.value_.end_ - buffer_ + 1;
+        return message_end() - message_begin();
     }
 
 //@}
@@ -2688,26 +2688,25 @@ private:
         is_complete_ = false;
         // Skip the version prefix string "8=FIX.4.2" or "8=FIXT.1.1", et cetera.
         // look for the first SOH
-        char const* e = std::min(buffer_ + 12, buffer_end_);
-        char const* b = std::find(buffer_ + 9, e, SOH);
-        if (b >= buffer_end_) {
+        char const* e = std::min(buffer_ + + details::len("8=FIX.X.X...."), buffer_end_);
+        char const* b = std::find(buffer_ + details::len("8=FIX.X.X"), e, SOH);
+        if (b == e) {
             return;
         }
         if (*b == SOH) {
             prefix_end_ = b++;
-        } else if (b == e) {
-            invalid();
-            return;
+        } else {
+            invalid(); // TODO: YO: this is unreachable code. b == e, so *b == SOH is always true.
         }
 
-        if (b + 2 >= buffer_end_) {
+        if (b + details::len("9=") >= buffer_end_) {
             return;
         }
         if (!(b[0] == '9' && b[1] == '=')) { // next field must be tag 9 BodyLength
             invalid();
             return;
         }
-        b += 2; // skip the "9=" for tag 9 BodyLength
+        b += details::len("9="); // skip for tag 9 BodyLength
 
         size_t bodylength(0); // the value of tag 9 BodyLength
 
@@ -2725,18 +2724,18 @@ private:
         }
 
         ++b; // skip the SOH
-        if (b + 3 >= buffer_end_) {
+        if (b + details::len("35=") >= buffer_end_) {
             return;
         }
 
-        if (b[0] != '3' || b[1] != '5' || b[2] != '=') { // next field must be tag 35 MsgType
+        if (!(b[0] == '3' && b[1] == '5' && b[2] == '=')) { // next field must be tag 35 MsgType
             invalid();
             return;
         }
 
         char const* checksum = b + bodylength;
 
-        if (checksum + 7 > buffer_end_) {
+        if (checksum + details::len("10=000|") > buffer_end_) {
             return;
         }
 
@@ -2751,27 +2750,26 @@ private:
             return;
         }
 
-        if (*(checksum + 6) != SOH) { // check for trailing SOH
+        if (*(checksum + details::len("10=000")) != SOH) { // check for trailing SOH
             invalid();
             return;
         }
 
         begin_.buffer_ = b;
         begin_.current_.tag_ = 35; // MsgType
-        b += 3;
+        b += details::len("35=");
         begin_.current_.value_.begin_ = b;
-        while(*++b != SOH) {
-            if (b >= checksum) {
-                invalid();
-                return;
-            }
+        b = std::find(b, checksum, SOH);
+        if (b == checksum) {
+            invalid();
+            return;
         }
         begin_.current_.value_.end_ = b;
 
         end_.buffer_ = checksum;
         end_.current_.tag_ = 10; //CheckSum
-        end_.current_.value_.begin_ = checksum + 3;
-        end_.current_.value_.end_ = checksum + 6;
+        end_.current_.value_.begin_ = checksum + details::len("10=");
+        end_.current_.value_.end_ = checksum + details::len("10=000");
 
         is_complete_ = true;
     }
@@ -2804,6 +2802,8 @@ inline void message_reader_const_iterator::increment()
     current_.value_.begin_ = buffer_;
     current_.tag_ = 0;
 
+    // find the tag number
+    // FIXME: YO: need to check that tag is numeric.
     while(*current_.value_.begin_ != '=' && *current_.value_.begin_ != SOH) {
         current_.tag_ *= 10;
         current_.tag_ += (*current_.value_.begin_ - '0');
@@ -2816,6 +2816,7 @@ inline void message_reader_const_iterator::increment()
     // has a null value.
     if (*current_.value_.begin_ == SOH) {
         current_.value_.end_ = current_.value_.begin_;
+        // FIXME: YO: invalid message here because no tag delimiter, need to throw an exception.
         return;
     }
 
@@ -2878,7 +2879,8 @@ inline bool is_tag_a_data_length(int tag)
 }
 
 // \brief std::ostream-able type returned by hffix::field_name function.
-template <typename AssociativeContainer> struct field_name_streamer {
+template <typename AssociativeContainer>
+struct field_name_streamer {
     int tag;
     AssociativeContainer const& field_dictionary;
     bool number_alternative;
@@ -2915,7 +2917,8 @@ template <typename AssociativeContainer> struct field_name_streamer {
   * std::cout << hffix::field_name(1000000, dictionary, false) << '\n';           // Unknown field tag, will print "\n".
   * \endcode
 */
-template <typename AssociativeContainer> details::field_name_streamer<AssociativeContainer> field_name(int tag, AssociativeContainer const& field_dictionary, bool or_number = true)
+template <typename AssociativeContainer>
+details::field_name_streamer<AssociativeContainer> field_name(int tag, AssociativeContainer const& field_dictionary, bool or_number = true)
 {
     return details::field_name_streamer<AssociativeContainer>(tag, field_dictionary, or_number);
 }
